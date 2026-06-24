@@ -1,6 +1,6 @@
 # Rol para la Lambda
 resource "aws_iam_role" "lambda_role" {
-  name = "${var.project_prefix}-lambda-role"
+  name = "${var.service_prefix}-lambda-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -16,7 +16,7 @@ resource "aws_iam_role" "lambda_role" {
 
 # Crear política para CloudWatch Logs
 resource "aws_iam_policy" "cloudwatch_logs_policy" {
-  name        = "${var.project_prefix}-cloudwatch-policy"
+  name        = "${var.service_prefix}-cloudwatch-policy"
   description = "Permite escribir logs en CloudWatch"
   policy = jsonencode({
     Version = "2012-10-17"
@@ -43,7 +43,7 @@ resource "aws_iam_role_policy_attachment" "cloudwatch_logs_attach" {
 
 # Politica para SQS - Enviar mensajes
 resource "aws_iam_policy" "sqs_send_policy" {
-  name        = "${var.project_prefix}-sqs-send-policy"
+  name        = "${var.service_prefix}-sqs-send-policy"
   description = "Permite enviar mensajes a la cola SQS"
   
   policy = jsonencode({

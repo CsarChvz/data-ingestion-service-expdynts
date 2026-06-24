@@ -2,7 +2,7 @@ module "docker_image" {
   source = "terraform-aws-modules/lambda/aws//modules/docker-build"
 
   create_ecr_repo = true
-  ecr_repo        = "${var.project_prefix}-repo"
+  ecr_repo        = "${var.service_prefix}-repo"
   use_image_tag   = false
 
   triggers = {
@@ -15,7 +15,7 @@ module "docker_image" {
 module "lambda_function" {
   source = "terraform-aws-modules/lambda/aws"
 
-  function_name  = "${var.project_prefix}-function"
+  function_name  = "${var.service_prefix}-function"
   create_package = false
   image_uri      = module.docker_image.image_uri
   package_type   = "Image"

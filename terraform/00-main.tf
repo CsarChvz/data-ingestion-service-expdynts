@@ -10,10 +10,10 @@ terraform {
     }
   }
 
-  # backend "s3" {
-  #   bucket  = "data-ingestion-service-expdynts-terraform-state"
-  #   key     = "terraform.tfstate"
-  #   region  = "us-east-1"
-  #   encrypt = true
-  # }
+  backend "s3" {
+    bucket  = "data-ingestion-service-expdynts-terraform-state"
+    key     = "terraform.tfstate"
+    region  = "us-east-1"
+    encrypt = true
+  }
 }
