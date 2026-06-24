@@ -1,0 +1,7 @@
+terraform/.terraform*
+terraform/terraform.tfstate
+terraform/terraform.tfvars
+terraform/terraform.tfstate.backup
+node_modules/
+*.lock
+dist/
