@@ -25,8 +25,17 @@ module "lambda_function" {
   create_role = false
   lambda_role = aws_iam_role.lambda_role.arn
 
+  create_current_version_allowed_triggers = false
+
+  allowed_triggers = {
+    EventBridge = {
+      principal  = "events.amazonaws.com"
+      source_arn = aws_cloudwatch_event_rule.daily_execution.arn
+    }
+  }
+  
   environment_variables = {
-    DATABASE_URL      = var.database_url
+    DATABASE_URL      = data.aws_ssm_parameter.db_url.value
     QUEUE_URL         = aws_sqs_queue.cola_origen.url
   }
 }

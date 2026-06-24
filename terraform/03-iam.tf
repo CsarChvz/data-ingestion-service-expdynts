@@ -1,6 +1,3 @@
-
-
-
 # Rol para la Lambda
 resource "aws_iam_role" "lambda_role" {
   name = "${var.project_prefix}-lambda-role"
@@ -58,7 +55,7 @@ resource "aws_iam_policy" "sqs_send_policy" {
           "sqs:SendMessage",
           "sqs:SendMessageBatch"
         ]
-        Resource = [local.arn_cola_origen]
+        Resource = [aws_sqs_queue.cola_origen.arn]
       }
     ]
   })

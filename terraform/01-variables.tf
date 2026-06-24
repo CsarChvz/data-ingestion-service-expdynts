@@ -16,9 +16,6 @@ variable "cola-origen" {
   default     = "cola-origen"
 }
 
-
-variable "database_url" {
-  description = "URL de conexión a la base de datos"
-  type        = string
-  sensitive   = true
+data "aws_ssm_parameter" "db_url" {
+  name = "/config/database_url"
 }
