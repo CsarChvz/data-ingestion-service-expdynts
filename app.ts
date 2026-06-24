@@ -1,64 +1,138 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
+import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { SQSClient, SendMessageBatchCommand, SendMessageBatchRequestEntry } from "@aws-sdk/client-sqs";
+import { db } from './db.js';
+import { expedientes, usuarioExpedientes } from './schema.js';
+import { eq } from 'drizzle-orm';
 
-// Inicializar el cliente fuera del handler para reutilizar la conexión
-const sqsClient = new SQSClient({});
-const QUEUE_URL = process.env.QUEUE_URL;
+const CONFIG = {
+    AWS_REGION: 'us-east-1',
+    QUEUE_URL: process.env.QUEUE_URL || '',
+    BATCH_SIZE: 10, // Máximo permitido por SQS
+} as const;
 
-export const handler = async (event: any[]): Promise<void> => {
-    if (!QUEUE_URL) {
-        throw new Error("La variable de entorno QUEUE_URL no está definida.");
-    }
+const sqsClient = new SQSClient({ region: CONFIG.AWS_REGION });
 
-    const mensajesProcesados: any[] = [];
+type BatchInfo = {
+    batchId: string;
+    offset: number;
+    limit: number;
+    totalRecords: number;
+    batchNumber: number;
+    totalBatches: number;
+};
 
-    // 1. Procesamiento de los datos
-    for (const record of event) {
-        try {
-            const body = typeof record.body === 'string' ? JSON.parse(record.body) : record.body;
-            
-            // Lógica de transformación
-            body.fecha_procesamiento = new Date().toISOString();
-            body.estado = "PROCESADO";
+type ProcessingResult = {
+    success: boolean;
+    usuarioExpedientesId?: number;
+    error?: string;
+};
 
-            console.log(`Item procesado: ${body.id_proceso || 'n/a'}`);
-            mensajesProcesados.push(body);
-        } catch (error) {
-            console.error(`Error al transformar mensaje:`, error);
+export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+    const startTime = Date.now();
+    const requestId = event.requestContext?.requestId || 'unknown';
+
+    console.log(`📦 [${requestId}] Iniciando proceso de extracción y encolado`);
+
+    try {
+        if (!CONFIG.QUEUE_URL) {
+            return createErrorResponse(400, 'QUEUE_URL no configurado');
         }
-    }
 
-    // 2. Envío a SQS en bloques (Batching)
-    if (mensajesProcesados.length > 0) {
-        await enviarBatchASQS(mensajesProcesados);
+        const batchInfo = await parseBatchInfo(event.body);
+        if (!batchInfo) {
+            return createErrorResponse(400, 'Batch info inválido o faltante');
+        }
+
+        // 1. Obtener registros de la BD
+        const registros = await fetchBatchRecords(batchInfo);
+        
+        if (registros.length === 0) {
+            return createSuccessResponse({ message: "No hay registros para procesar", processed: 0 });
+        }
+
+        // 2. Transformación de datos
+        const registrosProcesados = registros.map(item => ({
+            ...item,
+            id: `exp-${item.expedienteId}`,
+            fecha_procesamiento: new Date().toISOString(),
+            estado: "PROCESADO"
+        }));
+
+        // 3. Envío a SQS
+        const resultados = await enviarRegistrosASQS(registrosProcesados);
+
+        const responseData = {
+            batchId: batchInfo.batchId,
+            totalEnviados: registrosProcesados.length,
+            resultados
+        };
+
+        console.log(`✅ [${requestId}] Proceso finalizado con éxito`);
+        return createSuccessResponse(responseData);
+
+    } catch (error) {
+        console.error(`💥 [${requestId}] Error crítico:`, error);
+        return createErrorResponse(500, 'Error interno del servidor', { error: String(error) });
     }
 };
 
-async function enviarBatchASQS(items: any[]) {
-    const BATCH_SIZE = 10;
+async function fetchBatchRecords(batchInfo: BatchInfo) {
+    try {
+        return await db
+            .select({
+                expedienteId: usuarioExpedientes.expedienteId,
+                usuarioExpedientesId: usuarioExpedientes.usuarioExpedientesId,
+                expediente: { url: expedientes.url }
+            })
+            .from(usuarioExpedientes)
+            .innerJoin(expedientes, eq(usuarioExpedientes.expedienteId, expedientes.expedienteId))
+            .limit(batchInfo.limit)
+            .offset(batchInfo.offset);
+    } catch (error) {
+        throw new Error(`Error en DB: ${error instanceof Error ? error.message : 'Desconocido'}`);
+    }
+}
 
-    for (let i = 0; i < items.length; i += BATCH_SIZE) {
-        const chunk = items.slice(i, i + BATCH_SIZE);
+async function enviarRegistrosASQS(items: any[]): Promise<any> {
+    const report = { exitosos: 0, fallidos: 0 };
 
+    for (let i = 0; i < items.length; i += CONFIG.BATCH_SIZE) {
+        const chunk = items.slice(i, i + CONFIG.BATCH_SIZE);
+        
         const entries: SendMessageBatchRequestEntry[] = chunk.map((item, index) => ({
-            Id: `msg_${i + index}`, // ID único dentro del lote
+            Id: `msg_${i + index}`,
             MessageBody: JSON.stringify(item)
         }));
 
-        const command = new SendMessageBatchCommand({
-            QueueUrl: QUEUE_URL,
-            Entries: entries
-        });
-
         try {
-            const response = await sqsClient.send(command);
+            const command = new SendMessageBatchCommand({
+                QueueUrl: CONFIG.QUEUE_URL,
+                Entries: entries
+            });
             
-            if (response.Failed && response.Failed.length > 0) {
-                console.error("Fallaron algunos mensajes en el batch:", response.Failed);
-            } else {
-                console.log(`Batch enviado con éxito: ${chunk.length} mensajes.`);
-            }
+            await sqsClient.send(command);
+            report.exitosos += chunk.length;
         } catch (error) {
-            console.error("Error crítico enviando el batch:", error);
+            console.error("Error enviando bloque a SQS:", error);
+            report.fallidos += chunk.length;
         }
     }
+    return report;
+}
+
+async function parseBatchInfo(body: string | null): Promise<BatchInfo | null> {
+    if (!body) return null;
+    try {
+        const parsed = JSON.parse(body);
+        return (parsed.batchId && typeof parsed.offset === 'number') ? parsed : null;
+    } catch { return null; }
+}
+
+function createSuccessResponse(data: any): APIGatewayProxyResult {
+    return { statusCode: 200, body: JSON.stringify(data), headers: { 'Content-Type': 'application/json' } };
+}
+
+function createErrorResponse(statusCode: number, message: string, extra?: any): APIGatewayProxyResult {
+    return { statusCode, body: JSON.stringify({ message, ...extra }), headers: { 'Content-Type': 'application/json' } };
 }
