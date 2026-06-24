@@ -1,7 +1,7 @@
 resource "aws_sqs_queue" "cola_origen" {
-  name = "cola-origen"
+  name = var.cola_origen
 }
 
 resource "aws_sqs_queue" "cola_destino" {
-  name = "cola-destino"
+  name = var.cola_destino
 }

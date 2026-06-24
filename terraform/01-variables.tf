@@ -10,10 +10,16 @@ variable "service_prefix" {
   default     = "data-ingestion-service-expdynts"
 }
 
-variable "cola-origen" {
+variable "cola_origen" {
   description = "Nombre de la cola origen a donde se meteran los datos"
   type        = string
   default     = "cola-origen"
+}
+
+variable "cola_destino" {
+  description = "Nombre de la cola destino a donde se meteran los datos"
+  type        = string
+  default     = "cola-destino"
 }
 
 data "aws_ssm_parameter" "db_url" {
