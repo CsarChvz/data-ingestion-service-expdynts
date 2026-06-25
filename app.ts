@@ -8,50 +8,39 @@ import { eq } from 'drizzle-orm';
 const CONFIG = {
     AWS_REGION: 'us-east-1',
     QUEUE_URL: process.env.QUEUE_URL || '',
-    BATCH_SIZE: 10, // Máximo permitido por SQS
+    BATCH_SIZE: 10,
 } as const;
 
 const sqsClient = new SQSClient({ region: CONFIG.AWS_REGION });
 
-type BatchInfo = {
-    batchId: string;
-    offset: number;
-    limit: number;
-    totalRecords: number;
-    batchNumber: number;
-    totalBatches: number;
-};
-
-type ProcessingResult = {
-    success: boolean;
-    usuarioExpedientesId?: number;
-    error?: string;
-};
-
-export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
-    const startTime = Date.now();
-    const requestId = event.requestContext?.requestId || 'unknown';
-
-    console.log(`📦 [${requestId}] Iniciando proceso de extracción y encolado`);
+export const handler = async (event: any): Promise<APIGatewayProxyResult> => {
+    console.log(`📦 Iniciando proceso automático de extracción`);
 
     try {
         if (!CONFIG.QUEUE_URL) {
             return createErrorResponse(400, 'QUEUE_URL no configurado');
         }
 
-        const batchInfo = await parseBatchInfo(event.body);
-        if (!batchInfo) {
-            return createErrorResponse(400, 'Batch info inválido o faltante');
-        }
-
-        // 1. Obtener registros de la BD
-        const registros = await fetchBatchRecords(batchInfo);
+        // 1. Obtener registros
+        const registros =  await db
+            .select(
+                {       
+                    expedienteId: usuarioExpedientes.expedienteId,
+                    usuarioExpedientesId: usuarioExpedientes.usuarioExpedientesId,
+                    expediente: {
+                        url: expedientes.url
+                    }
+                }
+            )
+            .from(usuarioExpedientes)
+            .innerJoin(expedientes, eq(usuarioExpedientes.expedienteId, expedientes.expedienteId))
         
         if (registros.length === 0) {
-            return createSuccessResponse({ message: "No hay registros para procesar", processed: 0 });
+            console.log("✅ No hay registros pendientes para procesar.");
+            return createSuccessResponse({ message: "Nada pendiente" });
         }
 
-        // 2. Transformación de datos
+        // 2. Transformación
         const registrosProcesados = registros.map(item => ({
             ...item,
             id: `exp-${item.expedienteId}`,
@@ -60,41 +49,17 @@ export const lambdaHandler = async (event: APIGatewayProxyEvent): Promise<APIGat
         }));
 
         // 3. Envío a SQS
-        const resultados = await enviarRegistrosASQS(registrosProcesados);
+        const report = await enviarRegistrosASQS(registrosProcesados);
 
-        const responseData = {
-            batchId: batchInfo.batchId,
-            totalEnviados: registrosProcesados.length,
-            resultados
-        };
-
-        console.log(`✅ [${requestId}] Proceso finalizado con éxito`);
-        return createSuccessResponse(responseData);
+        return createSuccessResponse({ message: "Proceso completado", report });
 
     } catch (error) {
-        console.error(`💥 [${requestId}] Error crítico:`, error);
-        return createErrorResponse(500, 'Error interno del servidor', { error: String(error) });
+        console.error(`💥 Error crítico:`, error);
+        return createErrorResponse(500, 'Error interno', { error: String(error) });
     }
 };
 
-async function fetchBatchRecords(batchInfo: BatchInfo) {
-    try {
-        return await db
-            .select({
-                expedienteId: usuarioExpedientes.expedienteId,
-                usuarioExpedientesId: usuarioExpedientes.usuarioExpedientesId,
-                expediente: { url: expedientes.url }
-            })
-            .from(usuarioExpedientes)
-            .innerJoin(expedientes, eq(usuarioExpedientes.expedienteId, expedientes.expedienteId))
-            .limit(batchInfo.limit)
-            .offset(batchInfo.offset);
-    } catch (error) {
-        throw new Error(`Error en DB: ${error instanceof Error ? error.message : 'Desconocido'}`);
-    }
-}
-
-async function enviarRegistrosASQS(items: any[]): Promise<any> {
+async function enviarRegistrosASQS(items: any[]): Promise<{ exitosos: number, fallidos: number }> {
     const report = { exitosos: 0, fallidos: 0 };
 
     for (let i = 0; i < items.length; i += CONFIG.BATCH_SIZE) {
@@ -106,12 +71,10 @@ async function enviarRegistrosASQS(items: any[]): Promise<any> {
         }));
 
         try {
-            const command = new SendMessageBatchCommand({
+            await sqsClient.send(new SendMessageBatchCommand({
                 QueueUrl: CONFIG.QUEUE_URL,
                 Entries: entries
-            });
-            
-            await sqsClient.send(command);
+            }));
             report.exitosos += chunk.length;
         } catch (error) {
             console.error("Error enviando bloque a SQS:", error);
@@ -119,14 +82,6 @@ async function enviarRegistrosASQS(items: any[]): Promise<any> {
         }
     }
     return report;
-}
-
-async function parseBatchInfo(body: string | null): Promise<BatchInfo | null> {
-    if (!body) return null;
-    try {
-        const parsed = JSON.parse(body);
-        return (parsed.batchId && typeof parsed.offset === 'number') ? parsed : null;
-    } catch { return null; }
 }
 
 function createSuccessResponse(data: any): APIGatewayProxyResult {
