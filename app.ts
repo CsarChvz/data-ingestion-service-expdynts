@@ -67,7 +67,7 @@ async function enviarRegistrosASQS(items: any[]): Promise<{ exitosos: number, fa
         
         const entries: SendMessageBatchRequestEntry[] = chunk.map((item, index) => ({
             Id: `msg_${i + index}`,
-            MessageBody: JSON.stringify(item)
+            MessageBody: JSON.stringify({ data: item }) 
         }));
 
         try {
