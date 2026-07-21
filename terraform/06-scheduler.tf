@@ -1,7 +1,7 @@
 resource "aws_cloudwatch_event_rule" "daily_execution" {
   name                = "${var.service_prefix}-daily-rule"
   description         = "Ejecuta la lambda de lunes a viernes a las 09:10 UTC"
-  schedule_expression = "cron(10 9 ? * MON-FRI *)" 
+  schedule_expression = "cron(10 15 ? * MON-FRI *)" 
 }
 
 resource "aws_cloudwatch_event_target" "lambda_target" {
